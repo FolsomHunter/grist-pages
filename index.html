@@ -1,0 +1,499 @@
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>New Item Form</title>
+	<style>
+		body {
+			font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+			margin: 12px;
+		}
+		.row {
+			display: flex;
+			gap: 12px;
+			align-items: center;
+			margin-bottom: 10px;
+			flex-wrap: wrap;
+		}
+		label {
+			min-width: 140px;
+			font-weight: 600;
+		}
+		input[type="text"], input[type="number"], select, textarea {
+			flex: 1;
+			min-width: 260px;
+			padding: 8px;
+			border: 1px solid #ccc;
+			border-radius: 6px;
+		}
+		.attr-grid {
+			margin-top: 14px;
+			border-top: 1px solid #eee;
+			padding-top: 14px;
+		}
+		.attr-row {
+			display: grid;
+			grid-template-columns: 260px 1fr;
+			gap: 12px;
+			align-items: center;
+			margin-bottom: 10px;
+		}
+		.attr-name {
+			font-weight: 600;
+		}
+		.small {
+			color: #666;
+			font-size: 12px;
+		}
+		.actions {
+			margin-top: 14px;
+			display: flex;
+			gap: 10px;
+			align-items: center;
+		}
+		button {
+			padding: 10px 14px;
+			border: none;
+			border-radius: 8px;
+			cursor: pointer;
+			font-weight: 700;
+		}
+		button.primary {
+			background: #1f6feb;
+			color: white;
+		}
+		button.secondary {
+			background: #eee;
+		}
+		.status {
+			margin-top: 10px;
+			padding: 10px;
+			border-radius: 8px;
+			background: #f6f8fa;
+			white-space: pre-wrap;
+		}
+		.required {
+			color: #b42318;
+			margin-left: 6px;
+			font-weight: 800;
+		}
+	</style>
+</head>
+<body>
+	<div class="row">
+		<label>Item Name</label>
+		<input id="itemName" type="text" placeholder="e.g., Motor Assembly A" />
+	</div>
+
+	<div class="row">
+		<label>Item Type</label>
+		<select id="itemTypeSelect"></select>
+	</div>
+
+	<div class="small" id="hint"></div>
+
+	<div class="attr-grid" id="attrGrid"></div>
+
+	<div class="actions">
+		<button class="primary" id="createBtn">Create Item</button>
+		<button class="secondary" id="resetBtn">Reset</button>
+	</div>
+
+	<div class="status" id="status"></div>
+
+	<script src="https://unpkg.com/grist-widget"></script>
+	<script>
+		//--------------------------------------------------------------------------------------------------
+		// CONFIG: Adjust these if your column names differ.
+		//--------------------------------------------------------------------------------------------------
+		const CFG = {
+			tables: {
+				item: "item",
+				item_attribute_values: "item_attribute_values",
+				item_type: "item_type",
+				item_type_attributes: "item_type_attributes",
+				attribute_definition: "attribute_definition",
+			},
+			columns: {
+				// item table
+				item_name: "name",
+				item_item_type_ref: "item_type",
+
+				// item_attribute_values table
+				iav_item_ref: "item",
+				iav_attribute_def_ref: "attribute_definition",
+				iav_value: "value",
+
+				// item_type_attributes table
+				ita_item_type_ref: "item_type",
+				ita_attribute_def_ref: "attribute_definition",
+				ita_required: "required",			// optional
+				ita_default_value: "default_value",	// optional
+				ita_sort_order: "sort_order",		// optional
+
+				// attribute_definition table
+				ad_name: "name",
+				ad_data_type: "data_type",			// optional (text/number/bool/date/json/etc)
+				ad_uuid: "uuid",					// optional
+				ad_description: "description",		// optional
+			}
+		};
+
+		//--------------------------------------------------------------------------------------------------
+		// STATE
+		//--------------------------------------------------------------------------------------------------
+		let gItemTypes = [];					// [{id, fields}]
+		let gItemTypeAttrs = [];				// rows from item_type_attributes
+		let gAttrDefs = new Map();				// id -> row
+		let gRenderedAttrs = [];				// [{itaRow, adRow}]
+		let gSelectedItemTypeId = null;
+
+		//--------------------------------------------------------------------------------------------------
+		// DOM
+		//--------------------------------------------------------------------------------------------------
+		const elItemTypeSelect = document.getElementById("itemTypeSelect");
+		const elAttrGrid = document.getElementById("attrGrid");
+		const elStatus = document.getElementById("status");
+		const elHint = document.getElementById("hint");
+		const elCreateBtn = document.getElementById("createBtn");
+		const elResetBtn = document.getElementById("resetBtn");
+		const elItemName = document.getElementById("itemName");
+
+		//--------------------------------------------------------------------------------------------------
+		// HELPERS
+		//--------------------------------------------------------------------------------------------------
+		function setStatus(pMsg) {
+			elStatus.textContent = pMsg || "";
+		}
+
+		function safeField(pRow, pCol) {
+			return (pRow && pRow.fields && pRow.fields[pCol] !== undefined) ? pRow.fields[pCol] : null;
+		}
+
+		function compareSortOrder(pA, pB) {
+			const c = CFG.columns;
+			const a = safeField(pA, c.ita_sort_order);
+			const b = safeField(pB, c.ita_sort_order);
+
+			const na = (a === null || a === undefined) ? Number.POSITIVE_INFINITY : Number(a);
+			const nb = (b === null || b === undefined) ? Number.POSITIVE_INFINITY : Number(b);
+
+			if (na < nb) return -1;
+			if (na > nb) return 1;
+			return 0;
+		}
+
+		function inferInputType(pDataType) {
+			const t = (pDataType || "").toString().toLowerCase().trim();
+
+			if (["number", "numeric", "float", "double", "int", "integer", "decimal"].includes(t)) return "number";
+			if (["bool", "boolean"].includes(t)) return "checkbox";
+			if (["date"].includes(t)) return "date";
+			if (["datetime", "timestamp"].includes(t)) return "datetime-local";
+			// fallback
+			return "text";
+		}
+
+		function parseValueFromInput(pInputEl, pDataType) {
+			const type = inferInputType(pDataType);
+
+			if (type === "checkbox") {
+				return !!pInputEl.checked;
+			}
+			if (type === "number") {
+				const v = pInputEl.value;
+				if (v === "") return null;
+				const n = Number(v);
+				return Number.isFinite(n) ? n : null;
+			}
+			// date/datetime-local/text
+			const v = pInputEl.value;
+			return (v === "") ? null : v;
+		}
+
+		function buildAttrInput(pAdRow, pDefaultValue, pRequired) {
+			const c = CFG.columns;
+			const dataType = safeField(pAdRow, c.ad_data_type);
+			const inputType = inferInputType(dataType);
+
+			let inputEl;
+
+			if (inputType === "checkbox") {
+				inputEl = document.createElement("input");
+				inputEl.type = "checkbox";
+				inputEl.checked = (pDefaultValue === true || pDefaultValue === "true" || pDefaultValue === 1);
+			} else {
+				inputEl = document.createElement("input");
+				inputEl.type = inputType;
+				if (pDefaultValue !== null && pDefaultValue !== undefined) {
+					inputEl.value = String(pDefaultValue);
+				}
+			}
+
+			if (pRequired) {
+				inputEl.dataset.required = "1";
+			}
+
+			return inputEl;
+		}
+
+		//--------------------------------------------------------------------------------------------------
+		// LOAD DATA FROM DOC
+		//--------------------------------------------------------------------------------------------------
+		async function loadTables() {
+			setStatus("Loading tables…");
+
+			const t = CFG.tables;
+
+			// Load all rows we need.
+			const [itemTypes, itemTypeAttrs, attrDefs] = await Promise.all([
+				grist.docApi.fetchTable(t.item_type),
+				grist.docApi.fetchTable(t.item_type_attributes),
+				grist.docApi.fetchTable(t.attribute_definition),
+			]);
+
+			gItemTypes = itemTypes.records || [];
+			gItemTypeAttrs = itemTypeAttrs.records || [];
+
+			gAttrDefs.clear();
+			(attrDefs.records || []).forEach(r => gAttrDefs.set(r.id, r));
+
+			setStatus("");
+		}
+
+		//--------------------------------------------------------------------------------------------------
+		// RENDER ITEM TYPES
+		//--------------------------------------------------------------------------------------------------
+		function renderItemTypes() {
+			const c = CFG.columns;
+
+			elItemTypeSelect.innerHTML = "";
+
+			const placeholder = document.createElement("option");
+			placeholder.value = "";
+			placeholder.textContent = "Select an item type…";
+			elItemTypeSelect.appendChild(placeholder);
+
+			for (const r of gItemTypes) {
+				const opt = document.createElement("option");
+				opt.value = String(r.id);
+				opt.textContent = safeField(r, c.item_name) || safeField(r, c.ad_name) || `Item Type ${r.id}`;
+				elItemTypeSelect.appendChild(opt);
+			}
+		}
+
+		//--------------------------------------------------------------------------------------------------
+		// RENDER ATTRIBUTES FOR SELECTED TYPE
+		//--------------------------------------------------------------------------------------------------
+		function renderAttributesForType(pItemTypeId) {
+			const c = CFG.columns;
+
+			elAttrGrid.innerHTML = "";
+			gRenderedAttrs = [];
+
+			if (!pItemTypeId) {
+				elHint.textContent = "Pick an Item Type to see its attributes.";
+				return;
+			}
+
+			elHint.textContent = "Enter values for the attributes below, then click Create Item.";
+
+			// Filter item_type_attributes rows for this item_type.
+			let rows = gItemTypeAttrs.filter(r => {
+				const ref = safeField(r, c.ita_item_type_ref);
+				return String(ref) === String(pItemTypeId);
+			});
+
+			// Sort if sort_order exists.
+			rows = rows.slice().sort(compareSortOrder);
+
+			if (rows.length === 0) {
+				elAttrGrid.innerHTML = "<div class='small'>No attributes are configured for this item type.</div>";
+				return;
+			}
+
+			for (const itaRow of rows) {
+				const adId = safeField(itaRow, c.ita_attribute_def_ref);
+				const adRow = gAttrDefs.get(adId);
+
+				if (!adRow) continue;
+
+				const attrName = safeField(adRow, c.ad_name) || `Attribute ${adRow.id}`;
+				const required = !!safeField(itaRow, c.ita_required);
+				const defaultValue = safeField(itaRow, c.ita_default_value);
+
+				const wrap = document.createElement("div");
+				wrap.className = "attr-row";
+
+				const left = document.createElement("div");
+				left.className = "attr-name";
+				left.textContent = attrName;
+
+				if (required) {
+					const req = document.createElement("span");
+					req.className = "required";
+					req.textContent = "*";
+					left.appendChild(req);
+				}
+
+				const right = document.createElement("div");
+				const inputEl = buildAttrInput(adRow, defaultValue, required);
+
+				// Store ids so we can save later.
+				inputEl.dataset.attributeDefinitionId = String(adRow.id);
+
+				right.appendChild(inputEl);
+
+				// Optional description
+				const desc = safeField(adRow, c.ad_description);
+				if (desc) {
+					const d = document.createElement("div");
+					d.className = "small";
+					d.textContent = desc;
+					right.appendChild(d);
+				}
+
+				wrap.appendChild(left);
+				wrap.appendChild(right);
+
+				elAttrGrid.appendChild(wrap);
+
+				gRenderedAttrs.push({ itaRow, adRow, inputEl });
+			}
+		}
+
+		//--------------------------------------------------------------------------------------------------
+		// VALIDATION
+		//--------------------------------------------------------------------------------------------------
+		function validateForm() {
+			const name = (elItemName.value || "").trim();
+			if (!name) {
+				return "Item Name is required.";
+			}
+			if (!gSelectedItemTypeId) {
+				return "Item Type is required.";
+			}
+
+			for (const r of gRenderedAttrs) {
+				const c = CFG.columns;
+				const required = !!safeField(r.itaRow, c.ita_required);
+				if (!required) continue;
+
+				const dataType = safeField(r.adRow, c.ad_data_type);
+				const v = parseValueFromInput(r.inputEl, dataType);
+
+				if (v === null || v === "" || v === undefined) {
+					const attrName = safeField(r.adRow, c.ad_name) || `Attribute ${r.adRow.id}`;
+					return `Missing required attribute: ${attrName}`;
+				}
+			}
+
+			return null;
+		}
+
+		//--------------------------------------------------------------------------------------------------
+		// CREATE ITEM + ATTRIBUTE VALUE ROWS
+		//--------------------------------------------------------------------------------------------------
+		async function createItemAndValues() {
+			const err = validateForm();
+			if (err) {
+				setStatus(err);
+				return;
+			}
+
+			const t = CFG.tables;
+			const c = CFG.columns;
+
+			setStatus("Creating item…");
+
+			// 1) Create item record
+			const itemFields = {};
+			itemFields[c.item_name] = (elItemName.value || "").trim();
+			itemFields[c.item_item_type_ref] = Number(gSelectedItemTypeId);
+
+			const newItemId = await grist.docApi.addRecord(t.item, itemFields);
+
+			// 2) Create item_attribute_values records
+			setStatus("Creating attribute values…");
+
+			const valueRecords = [];
+
+			for (const r of gRenderedAttrs) {
+				const dataType = safeField(r.adRow, c.ad_data_type);
+				const value = parseValueFromInput(r.inputEl, dataType);
+
+				// If user left it blank and it's not required, skip creating a row.
+				const required = !!safeField(r.itaRow, c.ita_required);
+				if (!required && (value === null || value === "" || value === undefined)) {
+					continue;
+				}
+
+				const rec = {};
+				rec[c.iav_item_ref] = newItemId;
+				rec[c.iav_attribute_def_ref] = r.adRow.id;
+				rec[c.iav_value] = value;
+
+				valueRecords.push(rec);
+			}
+
+			if (valueRecords.length > 0) {
+				await grist.docApi.addRecords(t.item_attribute_values, valueRecords);
+			}
+
+			setStatus(
+				`Done.\n` +
+				`Created item id: ${newItemId}\n` +
+				`Created attribute value rows: ${valueRecords.length}`
+			);
+
+			// Reset for the next item (keep item_type selection)
+			elItemName.value = "";
+			for (const r of gRenderedAttrs) {
+				const dt = safeField(r.adRow, c.ad_data_type);
+				const inputType = inferInputType(dt);
+				if (inputType === "checkbox") r.inputEl.checked = false;
+				else r.inputEl.value = "";
+			}
+		}
+
+		//--------------------------------------------------------------------------------------------------
+		// INIT
+		//--------------------------------------------------------------------------------------------------
+		async function init() {
+			grist.ready({ requiredAccess: "full" });
+
+			try {
+				await loadTables();
+				renderItemTypes();
+				renderAttributesForType(null);
+
+				elItemTypeSelect.addEventListener("change", (e) => {
+					gSelectedItemTypeId = e.target.value || null;
+					renderAttributesForType(gSelectedItemTypeId);
+					setStatus("");
+				});
+
+				elCreateBtn.addEventListener("click", async () => {
+					try {
+						await createItemAndValues();
+					} catch (e) {
+						setStatus("Error:\n" + (e && e.message ? e.message : String(e)));
+					}
+				});
+
+				elResetBtn.addEventListener("click", () => {
+					elItemName.value = "";
+					setStatus("");
+				});
+
+				setStatus("Ready.");
+			} catch (e) {
+				setStatus("Failed to load:\n" + (e && e.message ? e.message : String(e)));
+			}
+		}
+
+		init();
+	</script>
+</body>
+</html>
