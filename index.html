@@ -470,8 +470,11 @@
 
 			try {
 				await loadTables();
+				setStatus("Tables loaded");
 				renderItemTypes();
+				setStatus("Item types rendered");
 				renderAttributesForType(null);
+				setStatus("Attributes for type rendered");
 
 				elItemTypeSelect.addEventListener("change", (e) => {
 					gSelectedItemTypeId = e.target.value || null;
