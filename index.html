@@ -119,24 +119,27 @@
 				// item table
 				item_name: "name",
 				item_item_type_ref: "item_type",
-
+			
+				// item_type table
+				item_type_name: "name",
+			
 				// item_attribute_values table
 				iav_item_ref: "item",
 				iav_attribute_def_ref: "attribute_definition",
 				iav_value: "value",
-
+			
 				// item_type_attributes table
 				ita_item_type_ref: "item_type",
 				ita_attribute_def_ref: "attribute_definition",
-				ita_required: "required",			// optional
-				ita_default_value: "default_value",	// optional
-				ita_sort_order: "sort_order",		// optional
-
+				ita_required: "required",
+				ita_default_value: "default_value",
+				ita_sort_order: "sort_order",
+			
 				// attribute_definition table
 				ad_name: "name",
-				ad_data_type: "data_type",			// optional (text/number/bool/date/json/etc)
-				ad_uuid: "uuid",					// optional
-				ad_description: "description",		// optional
+				ad_data_type: "data_type",
+				ad_uuid: "uuid",
+				ad_description: "description",
 			}
 		};
 
@@ -278,7 +281,7 @@
 			for (const r of gItemTypes) {
 				const opt = document.createElement("option");
 				opt.value = String(r.id);
-				opt.textContent = safeField(r, c.item_name) || safeField(r, c.ad_name) || `Item Type ${r.id}`;
+				opt.textContent = safeField(r, c.item_type_name) || `Item Type ${r.id}`;
 				elItemTypeSelect.appendChild(opt);
 			}
 		}
