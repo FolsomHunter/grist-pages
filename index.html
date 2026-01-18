@@ -464,6 +464,8 @@
 		// INIT
 		//--------------------------------------------------------------------------------------------------
 		async function init() {
+			setStatus("Initializing...");
+			
 			grist.ready({ requiredAccess: "full" });
 
 			try {
@@ -474,7 +476,6 @@
 				elItemTypeSelect.addEventListener("change", (e) => {
 					gSelectedItemTypeId = e.target.value || null;
 					renderAttributesForType(gSelectedItemTypeId);
-					setStatus("");
 				});
 
 				elCreateBtn.addEventListener("click", async () => {
