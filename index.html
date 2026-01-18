@@ -465,39 +465,21 @@
 		//--------------------------------------------------------------------------------------------------
 		async function init() {
 			setStatus("Initializing...");
-			
+		
 			grist.ready({ requiredAccess: "full" });
-
-			try {
-				await loadTables();
-				setStatus("Tables loaded");
-				renderItemTypes();
-				setStatus("Item types rendered");
-				renderAttributesForType(null);
-				setStatus("Attributes for type rendered");
-
-				elItemTypeSelect.addEventListener("change", (e) => {
-					gSelectedItemTypeId = e.target.value || null;
-					renderAttributesForType(gSelectedItemTypeId);
-				});
-
-				elCreateBtn.addEventListener("click", async () => {
-					try {
-						await createItemAndValues();
-					} catch (e) {
-						setStatus("Error:\n" + (e && e.message ? e.message : String(e)));
-					}
-				});
-
-				elResetBtn.addEventListener("click", () => {
-					elItemName.value = "";
-					setStatus("");
-				});
-
-				setStatus("Ready.");
-			} catch (e) {
-				setStatus("Failed to load:\n" + (e && e.message ? e.message : String(e)));
-			}
+		
+			grist.onReady(async () => {
+				try {
+					setStatus("Connected to Grist. Loading tables...");
+					await loadTables();
+					setStatus("Tables loaded");
+					renderItemTypes();
+					renderAttributesForType(null);
+					setStatus("Ready.");
+				} catch (e) {
+					setStatus("Failed to load:\n" + (e && e.message ? e.message : String(e)));
+				}
+			});
 		}
 
 		init();
